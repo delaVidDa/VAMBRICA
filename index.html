@@ -1,0 +1,195 @@
+import React, { useReducer, useEffect, useMemo, useCallback, useState } from 'react';
+import SceneView from './SceneView';
+import { normalizeExport } from './utils';
+import ObservadorGame from './games/ObservadorGame';
+import ExploracionGame from './games/ExploracionGame';
+import CombateGame from './games/CombateGame';
+import PuzzleGame from './games/PuzzleGame';
+
+// CONFIG SIMPLE
+const STORAGE_KEY = 'civilizacion_v2_min';
+const ARTIFACTS = [
+  { id: 'decision_tree', name: 'Árbol de Decisiones' },
+  { id: 'sound_exploration', name: 'Exploración Sonora' },
+  { id: 'turn_based_combat', name: 'Combate por Turnos' },
+  { id: 'structural_puzzle', name: 'Estructura' }
+];
+
+const CHARACTERS = {
+  energy: { id: 'energy', name: 'ENERGÍA', image: '👁️' },
+  body: { id: 'body', name: 'CUERPO', image: '🛡️' },
+  mind: { id: 'mind', name: 'MENTE', image: '📖' },
+  narrator: { id: 'narrator', name: 'NARRADOR', image: '📜', locked: true }
+};
+
+const generateScenes = () => {
+  const scenes = [];
+  const chars = ['energy', 'body', 'mind', 'narrator'];
+  let id = 1;
+  for (const c of chars) {
+    for (let n = 1; n <= 4; n++) {
+      scenes.push({
+        id,
+        characterId: c,
+        sceneNumber: n,
+        title: `${CHARACTERS[c].name} - Cap ${n}`,
+        description: `Escena ${n} de ${CHARACTERS[c].name}`,
+        connections: [],
+        gameArtifact: null,
+        completed: false,
+        visitCount: 0
+      });
+      id++;
+    }
+  }
+  return scenes;
+};
+
+// ACTIONS y reducer reducido
+const ACTIONS = {
+  NAVIGATE: 'NAVIGATE',
+  SET_SCENES: 'SET_SCENES',
+  SET_CURRENT_SCENE: 'SET_CURRENT_SCENE',
+  COMPLETE_SCENE: 'COMPLETE_SCENE',
+  ASSIGN_ARTIFACT: 'ASSIGN_ARTIFACT',
+  APPEND_FLAGS: 'APPEND_FLAGS'
+};
+
+const initialState = {
+  ui: { screen: 'menu' },
+  game: { scenes: generateScenes(), currentScene: null, flags: [], externalSession: null }
+};
+
+function reducer(state, action) {
+  switch (action.type) {
+    case ACTIONS.SET_SCENES:
+      return { ...state, game: { ...state.game, scenes: action.scenes } };
+    case ACTIONS.SET_CURRENT_SCENE:
+      return { ...state, game: { ...state.game, currentScene: action.scene } };
+    case ACTIONS.COMPLETE_SCENE:
+      return {
+        ...state,
+        game: {
+          ...state.game,
+          scenes: state.game.scenes.map(s => s.id === action.sceneId ? { ...s, completed: true, visitCount: s.visitCount + 1 } : s)
+        }
+      };
+    case ACTIONS.ASSIGN_ARTIFACT:
+      return {
+        ...state,
+        game: {
+          ...state.game,
+          scenes: state.game.scenes.map(s => s.id === action.sceneId ? { ...s, gameArtifact: action.artifactId } : s)
+        }
+      };
+    case ACTIONS.APPEND_FLAGS:
+      return { ...state, game: { ...state.game, flags: Array.from(new Set([...(state.game.flags||[]), ...(action.flags||[])])) } };
+    case ACTIONS.NAVIGATE:
+    default:
+      return { ...state, ui: { ...state.ui, screen: action.screen || state.ui.screen } };
+  }
+}
+
+export default function App() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const [selectedChar, setSelectedChar] = useState(null);
+
+  // init: assign the four artifacts to first four scenes (simple dev)
+  useEffect(() => {
+    const scenes = [...state.game.scenes];
+    if (!scenes[0].gameArtifact) {
+      scenes[0].gameArtifact = 'decision_tree';
+      scenes[1].gameArtifact = 'sound_exploration';
+      scenes[2].gameArtifact = 'turn_based_combat';
+      scenes[3].gameArtifact = 'structural_puzzle';
+      dispatch({ type: ACTIONS.SET_SCENES, scenes });
+    }
+    // eslint-disable-next-line
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ scenes: state.game.scenes, flags: state.game.flags }));
+  }, [state.game.scenes, state.game.flags]);
+
+  const openScene = (scene) => {
+    dispatch({ type: ACTIONS.SET_CURRENT_SCENE, scene });
+    dispatch({ type: ACTIONS.NAVIGATE, screen: 'game' });
+  };
+
+  const handleExportToHost = (normalized) => {
+    // store item and append flags
+    try {
+      localStorage.setItem(`${STORAGE_KEY}:${normalized.sessionId}`, JSON.stringify(normalized));
+      if (normalized.flags && normalized.flags.length) {
+        dispatch({ type: ACTIONS.APPEND_FLAGS, flags: normalized.flags });
+      }
+      // show minimal console feedback
+      console.info('Exported:', normalized.juego, normalized.flags || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Simple UI
+  if (state.ui.screen === 'menu') {
+    return (
+      <div style={{ padding: 24, color: '#fff', background: '#0f172a', minHeight: '100vh' }}>
+        <h1> Civilización Escondida (prueba mínima) </h1>
+        <div style={{ marginTop: 16 }}>
+          {Object.values(CHARACTERS).map(ch => {
+            const scenes = state.game.scenes.filter(s => s.characterId === ch.id);
+            const progress = scenes.length ? Math.round((scenes.filter(s => s.completed).length / scenes.length) * 100) : 0;
+            const locked = ch.locked && !['energy','body','mind'].every(id => state.game.scenes.filter(s=>s.characterId===id).every(ss=>ss.completed));
+            return (
+              <div key={ch.id} style={{ margin: '12px 0', padding: 12, background: '#111827', borderRadius: 8 }}>
+                <div><strong>{ch.name}</strong> {ch.image} {locked ? '(Bloqueado)' : ''}</div>
+                <div>Progreso: {progress}%</div>
+                <button disabled={locked} onClick={() => { setSelectedChar(ch.id); dispatch({ type: ACTIONS.NAVIGATE, screen: 'map' }); }} style={{ marginTop: 8 }}>Abrir</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (state.ui.screen === 'map') {
+    return (
+      <div style={{ padding: 24, color: '#fff', background: '#0f172a', minHeight: '100vh' }}>
+        <button onClick={() => dispatch({ type: ACTIONS.NAVIGATE, screen: 'menu' })}>← Menu</button>
+        <h2>Mapa (escenas)</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {state.game.scenes.filter(s => !selectedChar || s.characterId === selectedChar).map(scene => (
+            <div key={scene.id} style={{ padding: 12, background: '#111827', borderRadius: 8 }}>
+              <div><strong>#{scene.id}</strong> {scene.title}</div>
+              <div>{scene.description}</div>
+              <div>Artifact: {scene.gameArtifact || '—'}</div>
+              <button style={{ marginTop: 8 }} onClick={() => openScene(scene)}>Abrir escena</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (state.ui.screen === 'game' && state.game.currentScene) {
+    const scene = state.game.currentScene;
+    return (
+      <div style={{ padding: 24, color: '#fff', background: '#0f172a', minHeight: '100vh' }}>
+        <button onClick={() => dispatch({ type: ACTIONS.NAVIGATE, screen: 'map' })}>← Volver al mapa</button>
+        <h2>{scene.title}</h2>
+        <p>{scene.description}</p>
+
+        <div style={{ marginTop: 12 }}>
+          <SceneView scene={scene} externalSession={state.game.externalSession} globalFlags={state.game.flags || []} onExportToHost={handleExportToHost} />
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <button onClick={() => dispatch({ type: ACTIONS.COMPLETE_SCENE, sceneId: scene.id })}>Marcar completada</button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
